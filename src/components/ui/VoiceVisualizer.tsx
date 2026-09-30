@@ -14,6 +14,8 @@ export default function VoiceVisualizer({ isActive, color = '#ff4d4d' }: VoiceVi
     const animationFrameRef = useRef<number | null>(null);
     const streamRef = useRef<MediaStream | null>(null);
 
+    const smoothDataRef = useRef<Float32Array | null>(null);
+
     useEffect(() => {
         if (isActive) {
             startVisualizer();
@@ -25,6 +27,9 @@ export default function VoiceVisualizer({ isActive, color = '#ff4d4d' }: VoiceVi
     }, [isActive]);
 
     const startVisualizer = async () => {
+        // Éviter la double initialisation
+        if (audioContextRef.current) return;
+
         try {
             const stream = await navigator.mediaDevices.getUserMedia({
                 audio: {
@@ -46,6 +51,9 @@ export default function VoiceVisualizer({ isActive, color = '#ff4d4d' }: VoiceVi
             const source = audioContext.createMediaStreamSource(stream);
             source.connect(analyser);
 
+            // Initialiser le tableau de lissage une seule fois
+            smoothDataRef.current = new Float32Array(analyser.frequencyBinCount);
+
             draw();
         } catch (err) {
             console.error('Error accessing microphone for visualizer:', err);
@@ -55,17 +63,22 @@ export default function VoiceVisualizer({ isActive, color = '#ff4d4d' }: VoiceVi
     const stopVisualizer = () => {
         if (animationFrameRef.current) {
             cancelAnimationFrame(animationFrameRef.current);
+            animationFrameRef.current = null;
         }
         if (streamRef.current) {
             streamRef.current.getTracks().forEach(track => track.stop());
+            streamRef.current = null;
         }
         if (audioContextRef.current) {
             audioContextRef.current.close();
+            audioContextRef.current = null;
         }
+        analyserRef.current = null;
+        smoothDataRef.current = null;
     };
 
     const draw = () => {
-        if (!canvasRef.current || !analyserRef.current) return;
+        if (!canvasRef.current || !analyserRef.current || !smoothDataRef.current) return;
 
         const canvas = canvasRef.current;
         const ctx = canvas.getContext('2d');
@@ -73,13 +86,12 @@ export default function VoiceVisualizer({ isActive, color = '#ff4d4d' }: VoiceVi
 
         const bufferLength = analyserRef.current.frequencyBinCount;
         const dataArray = new Uint8Array(bufferLength);
-
-        // Pour un mouvement plus fluide (amortissement)
-        const smoothData = new Float32Array(bufferLength);
+        const smoothData = smoothDataRef.current;
 
         const renderFrame = () => {
+            if (!analyserRef.current || !smoothDataRef.current) return;
             animationFrameRef.current = requestAnimationFrame(renderFrame);
-            analyserRef.current!.getByteFrequencyData(dataArray);
+            analyserRef.current.getByteFrequencyData(dataArray);
 
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 

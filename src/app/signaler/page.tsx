@@ -138,9 +138,12 @@ export default function SignalerFlow() {
         stopListening();
         window.speechSynthesis.cancel();
 
+        // Nettoyage des balises Markdown (*, _, #) pour éviter que la synthèse ne lise "étoile étoile"
+        const cleanText = text.replace(/[*_#`]/g, '').trim();
+
         // Timeout de secours au cas où l'API vocal plante silencieusement
         // (150ms / caractère garantit que le timeout ne coupe pas une phrase)
-        const maxDuration = Math.max(8000, text.length * 150);
+        const maxDuration = Math.max(8000, cleanText.length * 150);
         let safetyTimeout: any;
 
         const advance = () => {
@@ -151,7 +154,7 @@ export default function SignalerFlow() {
 
         safetyTimeout = setTimeout(advance, maxDuration);
 
-        const utterance = new SpeechSynthesisUtterance(text);
+        const utterance = new SpeechSynthesisUtterance(cleanText);
         utterance.lang = 'fr-FR';
         utterance.rate = 1.0; // vitesse normale
 
@@ -187,18 +190,6 @@ export default function SignalerFlow() {
             try { (window as any).currentAudio.pause(); } catch (e) { }
         }
 
-        // Demander explicitement le micro avec réduction de bruit pour "réveiller" le hardware
-        // et s'assurer que le visualiseur et la reco partagent le même flux de qualité
-        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-            navigator.mediaDevices.getUserMedia({
-                audio: {
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true
-                }
-            }).catch(err => console.error("Hardware mic access error:", err));
-        }
-
         const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
         if (!SpeechRecognition) return;
 
@@ -230,28 +221,27 @@ export default function SignalerFlow() {
                 const isFr = ['1', 'un', 'francais', 'français', 'france'].some(word => liveText.includes(word));
                 const isDioula = ['2', 'deux', 'dioula', 'jula'].some(word => liveText.includes(word));
                 const isBaoule = ['3', 'trois', 'baoule', 'baoulé'].some(word => liveText.includes(word));
+                const isBete = ['4', 'quatre', 'bété', 'bete'].some(word => liveText.includes(word));
 
-                // Priorité absolue au Français si détecté
-                if (isFr) {
+                // Dès qu'une langue est détectée dans les résultats intermédiaires,
+                // on coupe le micro pour enchaîner sans délai
+                if (isFr || isDioula || isBaoule || isBete) {
                     stopListening();
-                    return;
-                }
-
-                if (isDioula || isBaoule) {
-                    stopListening(); // Coupe directement pour enchaîner sans délai
+                    return; // Empêcher les appels multiples sur les résultats intermédiaires suivants
                 }
             }
-            // Détection Oui/Non
-            else if (target.startsWith('listen_') && target !== 'listen_other' && target !== 'listen_details') {
+            // Détection Oui/Non pour les questions fermées
+            else if (target.startsWith('listen_') && target !== 'listen_other' && target !== 'listen_details' && target !== 'listen_contact') {
                 if (liveText.includes('oui') || liveText.includes('non') || liveText.includes('ouais') || liveText.includes('nan')) {
                     stopListening(); // Instantané
+                    return;
                 }
             }
             // Détection de pause pour les questions ouvertes ou recueil contact
             else if (target === 'listen_other' || target === 'listen_details' || target === 'listen_contact') {
                 if (liveText.length > 5) {
                     if ((window as any).silenceTimer) clearTimeout((window as any).silenceTimer);
-                    (window as any).silenceTimer = setTimeout(() => stopListening(), 1800);
+                    (window as any).silenceTimer = setTimeout(() => stopListening(), 2500);
                 }
             }
         };
@@ -426,11 +416,18 @@ export default function SignalerFlow() {
             if (document.visibilityState === 'visible' && shouldListenRef.current && !isRecording) {
                 console.log("PWA: App returned to foreground, resuming mic...");
                 const currentStep = step;
-                // Re-déclenche l'écoute pour l'étape actuelle
-                if (currentStep.startsWith('ask_') || currentStep.startsWith('listening_') || currentStep.startsWith('listen_')) {
-                    const target = currentStep === 'listening_lang' ? 'lang' :
-                        currentStep.startsWith('listen_') ? currentStep :
-                            `listen_${currentStep.replace('ask_', '')}`;
+                // Table de correspondance étape → target d'écoute
+                const stepToTarget: Record<string, string> = {
+                    'listening_lang': 'lang',
+                    'listening_contact': 'listen_contact',
+                    'listen_fever': 'listen_fever',
+                    'listen_digestive': 'listen_digestive',
+                    'listen_rash': 'listen_rash',
+                    'listen_other': 'listen_other',
+                    'listen_details': 'listen_details',
+                };
+                const target = stepToTarget[currentStep];
+                if (target) {
                     startListening(target);
                 }
             }
@@ -592,11 +589,15 @@ export default function SignalerFlow() {
                 )}
 
                 {/* ETAPES ECOUTE (USER PARLE) */}
-                {(step.startsWith('list') || step.startsWith('listen_')) && (
+                {(step === 'listening_lang' || step === 'listening_contact' || step.startsWith('listen_')) && (
                     <div className="flex-1 flex flex-col items-center justify-center w-full animate-in fade-in slide-in-from-bottom-12 duration-500">
 
                         <h1 className="text-2xl font-black text-white text-center mb-4 uppercase tracking-tight">
-                            {step === 'listening_lang' ? "Choix de la langue" : step === 'listen_details' ? "Détails patient" : "Répondez (Oui / Non)"}
+                            {step === 'listening_lang' ? "Choix de la langue"
+                                : step === 'listening_contact' ? "Nom & Téléphone"
+                                : step === 'listen_details' ? "Détails patient"
+                                : step === 'listen_other' ? "Autres symptômes"
+                                : "Répondez (Oui / Non)"}
                         </h1>
 
                         <div className="mb-6 w-full flex justify-center">

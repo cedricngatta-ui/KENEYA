@@ -27,6 +27,7 @@ export default function TriagePage() {
 
     const [coords, setCoords] = useState<{ lat: number, lng: number } | null>(null);
     const [gpsStatus, setGpsStatus] = useState<'idle' | 'requesting' | 'granted' | 'denied'>('idle');
+    const stepRef = useRef(step);
 
     // Arrêt propre du TTS en quittant la page
     useEffect(() => {
@@ -72,7 +73,8 @@ export default function TriagePage() {
         stopListening();
         window.speechSynthesis.cancel();
 
-        const maxDuration = Math.max(8000, text.length * 150);
+        const cleanText = text.replace(/[*_#`]/g, '').trim();
+        const maxDuration = Math.max(8000, cleanText.length * 150);
         let safetyTimeout: any;
 
         const advance = () => {
@@ -82,7 +84,7 @@ export default function TriagePage() {
 
         safetyTimeout = setTimeout(advance, maxDuration);
 
-        const utterance = new SpeechSynthesisUtterance(text);
+        const utterance = new SpeechSynthesisUtterance(cleanText);
         utterance.lang = 'fr-FR';
         (window as any).currentUtterance = utterance;
         utterance.onend = advance;
@@ -129,6 +131,11 @@ export default function TriagePage() {
         recognition.continuous = true;
         recognition.interimResults = true;
 
+        recognition.onerror = (event: any) => {
+            console.error('Triage Speech Recognition Error:', event.error);
+            setIsRecording(false);
+        };
+
         recognition.onstart = () => { setIsRecording(true); setTranscript(''); transcriptRef.current = ''; };
         recognition.onresult = (e: any) => {
             let current = '';
@@ -139,7 +146,7 @@ export default function TriagePage() {
             // Pause détection : l'utilisateur a arrêté de parler
             if (current.length > 5) {
                 if ((window as any).silenceTimer) clearTimeout((window as any).silenceTimer);
-                (window as any).silenceTimer = setTimeout(() => stopListening(), 1800);
+                (window as any).silenceTimer = setTimeout(() => stopListening(), 2500);
             }
         };
 
@@ -148,12 +155,19 @@ export default function TriagePage() {
             const finalTranscript = transcriptRef.current.trim().toLowerCase();
             if (!finalTranscript) return;
 
-            if (step === 'listening_lang') {
-                if (finalTranscript.includes('1') || finalTranscript.includes('français')) setUserLanguage('fr');
-                else if (finalTranscript.includes('2') || finalTranscript.includes('dioula')) setUserLanguage('dioula');
-                else if (finalTranscript.includes('3') || finalTranscript.includes('baoulé')) setUserLanguage('baoule');
-                else if (finalTranscript.includes('4') || finalTranscript.includes('bété')) setUserLanguage('bete');
-                else if (finalTranscript.includes('5') || finalTranscript.includes('sénoufo')) setUserLanguage('senoufo');
+            const currentStep = stepRef.current;
+
+            if (currentStep === 'listening_lang') {
+                const isFr = ['1', 'un', 'francais', 'français', 'france'].some(w => finalTranscript.includes(w));
+                const isDioula = ['2', 'deux', 'dioula', 'jula'].some(w => finalTranscript.includes(w));
+                const isBaoule = ['3', 'trois', 'baoule', 'baoulé'].some(w => finalTranscript.includes(w));
+                const isBete = ['4', 'quatre', 'bété', 'bete'].some(w => finalTranscript.includes(w));
+
+                if (isFr) setUserLanguage('fr');
+                else if (isDioula) setUserLanguage('dioula');
+                else if (isBaoule) setUserLanguage('baoule');
+                else if (isBete) setUserLanguage('bete');
+                else setUserLanguage('fr'); // Français par défaut si incompréhension
                 setStep('lang');
                 return;
             }
@@ -190,8 +204,9 @@ export default function TriagePage() {
     // CYCLE DE VIE VOCAL
     // ==========================================
     useEffect(() => {
+        stepRef.current = step;
         if (step === 'greeting_vocal') {
-            speakText("Bonjour. Choississez votre langue. Si c'est Français dites 1. Si c'est Dioula dites 2. Si c'est Baoulé dites 3.", 'listening_lang');
+            speakText("Bonjour. Choississez votre langue. Si c'est Français dites 1. Si c'est Dioula dites 2. Si c'est Baoulé dites 3. Si c'est Bété dites 4.", 'listening_lang');
         } else if (step === 'listening_lang') {
             startListening();
         } else if (step === 'lang') {

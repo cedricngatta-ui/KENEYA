@@ -1,15 +1,9 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
-
-// Utilisation du service role pour bypasser RLS
-// Ajout d'un fallback sur anon_key pour permettre le build même si la clé secrète manque localement
-const supabaseAdmin = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
+import { getSupabaseAdmin } from '@/lib/supabase/admin';
 
 export async function GET(req: Request) {
     try {
+        const supabaseAdmin = getSupabaseAdmin();
         const { searchParams } = new URL(req.url);
         const zone = searchParams.get('zone');
         const syndrome = searchParams.get('syndrome');

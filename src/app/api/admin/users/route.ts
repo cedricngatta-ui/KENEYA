@@ -1,21 +1,9 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
-
-// IMPORTANT: Cette route utilise le Service Role Key pour contourner les restrictions
-// de création d'utilisateur côté client (qui déconnectent l'admin).
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''; // Fallback dangereux mais requis si la clé secrète manque pour le proto
-
-// Initialisation du client admin
-const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
-    auth: {
-        autoRefreshToken: false,
-        persistSession: false
-    }
-});
+import { getSupabaseAdmin } from '@/lib/supabase/admin';
 
 export async function POST(request: Request) {
     try {
+        const supabaseAdmin = getSupabaseAdmin();
         const body = await request.json();
         const { phone, password, role, language = 'fr' } = body;
 

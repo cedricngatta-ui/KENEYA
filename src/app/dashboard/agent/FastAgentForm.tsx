@@ -57,20 +57,16 @@ export default function FastAgentForm() {
                 const recog = new SpeechRecognition();
                 recog.continuous = false; // S'arrête après un silence
                 recog.interimResults = true; // Montre les résultats partiels
-                recog.lang = 'fr-CI'; // Français Ivoirien
+                recog.lang = 'fr-FR'; // Standard compatible universel
 
                 recog.onresult = (event: any) => {
-                    let finalTranscript = '';
-                    let interimTranscript = '';
-                    for (let i = event.resultIndex; i < event.results.length; ++i) {
-                        if (event.results[i].isFinal) {
-                            finalTranscript += event.results[i][0].transcript;
-                        } else {
-                            interimTranscript += event.results[i][0].transcript;
-                        }
+                    let fullTranscript = '';
+                    for (let i = 0; i < event.results.length; ++i) {
+                        fullTranscript += event.results[i][0].transcript + ' ';
                     }
-                    if (finalTranscript || interimTranscript) {
-                        setTranscript(finalTranscript || interimTranscript);
+                    const clean = fullTranscript.trim();
+                    if (clean) {
+                        setTranscript(clean);
                     }
                 };
 
@@ -100,7 +96,7 @@ export default function FastAgentForm() {
             const timer = setTimeout(() => {
                 analyzeTranscriptAndFill(transcript);
                 setAiAnalyzing(false);
-            }, 1040);
+            }, 800);
             return () => clearTimeout(timer);
         } else if (aiAnalyzing && !transcript) {
             setAiAnalyzing(false);
@@ -158,27 +154,25 @@ export default function FastAgentForm() {
             recognition.stop();
         } else {
             setTranscript('');
+            if (typeof window !== 'undefined') {
+                window.speechSynthesis.cancel();
+            }
             setIsListening(true);
 
-            // Capture GPS simultanée avec assistance vocale si pas déjà fait
+            // Capture GPS silencieuse en tâche de fond si pas encore effectuée
             if (gpsStatus === 'idle') {
                 setGpsStatus('requesting');
-                const msg = new SpeechSynthesisUtterance("Je lance la localisation. Veuillez autoriser l'accès si on vous le demande.");
-                msg.lang = 'fr-FR';
-                msg.onend = () => {
-                    navigator.geolocation.getCurrentPosition(
-                        (pos) => {
-                            setCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
-                            setGpsStatus('granted');
-                        },
-                        (err) => {
-                            setGpsStatus('denied');
-                            console.warn("GPS refusé sur FastAgentForm");
-                        },
-                        { enableHighAccuracy: true, timeout: 5000 }
-                    );
-                };
-                window.speechSynthesis.speak(msg);
+                navigator.geolocation.getCurrentPosition(
+                    (pos) => {
+                        setCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+                        setGpsStatus('granted');
+                    },
+                    (err) => {
+                        setGpsStatus('denied');
+                        console.warn("GPS non disponible sur FastAgentForm");
+                    },
+                    { enableHighAccuracy: true, timeout: 5000 }
+                );
             }
 
             try { recognition.start(); } catch (e) { }

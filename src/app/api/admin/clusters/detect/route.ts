@@ -1,15 +1,9 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
-
-// Utilisation du service role pour bypasser RLS lors de l'analyse globale
-// Ajout d'un fallback sur anon_key pour permettre le build même si la clé secrète manque localement
-const supabaseAdmin = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
+import { getSupabaseAdmin } from '@/lib/supabase/admin';
 
 export async function POST() {
     try {
+        const supabaseAdmin = getSupabaseAdmin();
         // 1. Récupération du seuil de configuration
         const { data: configData } = await supabaseAdmin
             .from('system_config')
@@ -17,7 +11,7 @@ export async function POST() {
             .eq('key', 'alert_threshold')
             .single();
 
-        const threshold = configData ? parseInt(configData.value) : 5;
+        const threshold = configData ? parseInt((configData as any).value) : 5;
 
         // 2. Récupération des rapports des dernières 48 heures
         const fortyEightHoursAgo = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
