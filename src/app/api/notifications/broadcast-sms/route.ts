@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
-
 import { sendSMS } from '@/lib/sms';
+
+export const runtime = 'edge';
 
 export async function POST(req: Request) {
     try {

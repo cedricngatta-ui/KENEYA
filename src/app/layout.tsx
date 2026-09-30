@@ -5,6 +5,8 @@ import { LanguageProvider } from '@/components/providers/LanguageProvider';
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-inter' });
 
+export const runtime = 'edge';
+
 export const viewport: Viewport = {
     themeColor: '#FF6F00',
 };

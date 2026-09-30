@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 
+export const runtime = 'edge';
+
 export async function POST(req: Request) {
     try {
         const { text, voiceId = 'pNInz6obpgnuM07kgL4L' } = await req.json(); // Adam voice by default

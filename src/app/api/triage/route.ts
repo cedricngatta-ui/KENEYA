@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { OfficialDataService } from '@/services/OfficialDataService';
 import { createClient } from '@supabase/supabase-js';
 
+export const runtime = 'edge';
+
 // Type attendu du Frontend
 interface TriageRequest {
     transcript: string; // Ce que l'utilisateur a dit (ex: "J'ai mal à la tête et je vomis du sang")

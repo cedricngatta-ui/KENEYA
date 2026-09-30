@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { sendSMS } from '@/lib/sms';
 import { createClient } from '@/lib/supabase/server';
 
+export const runtime = 'edge';
+
 export async function POST(request: Request) {
     try {
         const body = await request.json();
