@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { OfficialDataService } from '@/services/OfficialDataService';
+import { createClient } from '@supabase/supabase-js';
 
 // Type attendu du Frontend
 interface TriageRequest {
@@ -31,13 +32,20 @@ export async function POST(req: Request) {
         let instructions: string[] = ["Reposez-vous et hydratez-vous.", "Consultez si les symptômes persistent après 48h."];
         let hospital = undefined;
 
-        // Récupération dynamique depuis la BDD (table configurée dans le panel Admin)
+        // Récupération dynamique depuis la BDD si configurée
         const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
         const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
-        const { createClient } = require('@supabase/supabase-js');
-        const supabase = createClient(supabaseUrl, supabaseAnonKey);
+        let dbDiseases: any[] | null = null;
 
-        const { data: dbDiseases } = await supabase.from('diseases').select('*');
+        if (supabaseUrl && supabaseAnonKey && !supabaseUrl.includes('placeholder')) {
+            try {
+                const supabase = createClient(supabaseUrl, supabaseAnonKey);
+                const { data } = await supabase.from('diseases').select('*');
+                dbDiseases = data;
+            } catch (err) {
+                console.warn("DB diseases fetch skipped:", err);
+            }
+        }
 
         if (dbDiseases && dbDiseases.length > 0) {
             // Trie par sévérité pour que les urgences ROUGES priment
