@@ -7,8 +7,8 @@ export async function proxy(request: NextRequest) {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-    // Skip middleware if Supabase is not configured
-    if (!supabaseUrl || !supabaseKey || supabaseUrl.includes('your_supabase')) {
+    // Skip middleware if Supabase is not configured or uses placeholder
+    if (!supabaseUrl || !supabaseKey || supabaseUrl.includes('your_supabase') || supabaseUrl.includes('placeholder')) {
         return NextResponse.next({ request });
     }
 

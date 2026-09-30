@@ -14,15 +14,21 @@ export default function Home() {
 
     useEffect(() => {
         const checkUser = async () => {
-            const supabase = createClient();
-            const { data: { user } } = await supabase.auth.getUser();
-            if (user) {
-                setUser(user);
-                const { data: userData } = await supabase.from('users').select('role').eq('id', user.id).single() as any;
-                if (userData?.role === 'admin') setDashboardUrl('/admin');
-                else if (userData?.role === 'health_center') setDashboardUrl('/dashboard/center');
-                else if (userData?.role === 'community_agent') setDashboardUrl('/dashboard/agent');
-                else setDashboardUrl('/dashboard');
+            const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+            if (!url || url.includes('placeholder') || url.includes('your_supabase')) return;
+            try {
+                const supabase = createClient();
+                const { data: { user } } = await supabase.auth.getUser();
+                if (user) {
+                    setUser(user);
+                    const { data: userData } = await supabase.from('users').select('role').eq('id', user.id).single() as any;
+                    if (userData?.role === 'admin') setDashboardUrl('/admin');
+                    else if (userData?.role === 'health_center') setDashboardUrl('/dashboard/center');
+                    else if (userData?.role === 'community_agent') setDashboardUrl('/dashboard/agent');
+                    else setDashboardUrl('/dashboard');
+                }
+            } catch (e) {
+                console.warn('Supabase auth check skipped in test mode:', e);
             }
         };
         checkUser();
