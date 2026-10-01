@@ -5,6 +5,7 @@ import { Shield, ChevronLeft, Fingerprint, Activity, User, Phone, CheckCircle2, 
 import Link from 'next/link';
 import BioScanner from '@/components/dashboard/BioScanner';
 import { saveReport } from '@/lib/reports';
+import { extractContact } from '@/lib/voice';
 import { useLanguage } from '@/components/providers/LanguageProvider';
 
 export default function TriagePage() {
@@ -22,6 +23,11 @@ export default function TriagePage() {
 
     const recognitionRef = useRef<any>(null);
     const transcriptRef = useRef('');
+    // Android coupe/relance le micro : on garde le texte déjà dit et on sait si une session est active
+    const shouldListenRef = useRef(false);
+    const committedRef = useRef('');
+    const activeRef = useRef(false);
+    const finalizeRef = useRef<(() => void) | null>(null);
     const [transcript, setTranscript] = useState('');
     const [isRecording, setIsRecording] = useState(false);
 
@@ -42,27 +48,33 @@ export default function TriagePage() {
         // On parle d'abord
         const utterance = new SpeechSynthesisUtterance(msg);
         utterance.lang = 'fr-FR';
-        utterance.onend = () => {
+        let gpsStarted = false;
+        const askPosition = () => {
+            if (gpsStarted) return;
+            gpsStarted = true;
+            if (!navigator.geolocation) {
+                setGpsStatus('denied');
+                setStep('listening_contact');
+                return;
+            }
             navigator.geolocation.getCurrentPosition(
                 (pos) => {
                     setCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
                     setGpsStatus('granted');
                     // Notification vocale de succès
-                    const successMsg = new SpeechSynthesisUtterance("Merci. Commençons le recueil de vos informations.");
-                    successMsg.lang = 'fr-FR';
-                    successMsg.onend = () => setStep('listening_contact');
-                    window.speechSynthesis.speak(successMsg);
+                    speakText("Merci. Commençons le recueil de vos informations.", 'listening_contact');
                 },
                 (err) => {
                     setGpsStatus('denied');
-                    const failMsg = new SpeechSynthesisUtterance("D'accord. Commençons.");
-                    failMsg.lang = 'fr-FR';
-                    failMsg.onend = () => setStep('listening_contact');
-                    window.speechSynthesis.speak(failMsg);
+                    speakText("D'accord. Commençons.", 'listening_contact');
                 },
                 { enableHighAccuracy: true, timeout: 8000 }
             );
         };
+        // Secours : certains navigateurs ne déclenchent jamais onend
+        setTimeout(askPosition, Math.max(8000, msg.length * 150));
+        utterance.onend = askPosition;
+        utterance.onerror = askPosition;
         window.speechSynthesis.speak(utterance);
     };
 
@@ -77,9 +89,13 @@ export default function TriagePage() {
         const maxDuration = Math.max(8000, cleanText.length * 150);
         let safetyTimeout: any;
 
+        let advanced = false;
         const advance = () => {
+            if (advanced) return;
+            advanced = true;
             clearTimeout(safetyTimeout);
-            setStep(nextStep);
+            if (typeof nextStep === 'function') nextStep();
+            else setStep(nextStep);
         };
 
         safetyTimeout = setTimeout(advance, maxDuration);
@@ -124,7 +140,17 @@ export default function TriagePage() {
         window.speechSynthesis.cancel();
 
         const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-        if (!SpeechRecognition) return;
+        if (!SpeechRecognition) {
+            speakText("Votre navigateur ne permet pas la reconnaissance vocale. Veuillez ouvrir Keneya avec Google Chrome.", 'intro');
+            return;
+        }
+
+        // Nouvelle question : transcription vide
+        if ((window as any).silenceTimer) clearTimeout((window as any).silenceTimer);
+        transcriptRef.current = '';
+        committedRef.current = '';
+        setTranscript('');
+        shouldListenRef.current = true;
 
         const recognition = new SpeechRecognition();
         recognition.lang = 'fr-FR';
@@ -136,24 +162,46 @@ export default function TriagePage() {
             setIsRecording(false);
         };
 
-        recognition.onstart = () => { setIsRecording(true); setTranscript(''); transcriptRef.current = ''; };
+        recognition.onstart = () => { activeRef.current = true; setIsRecording(true); };
         recognition.onresult = (e: any) => {
-            let current = '';
-            for (let i = 0; i < e.results.length; i++) current += e.results[i][0].transcript;
+            let session = '';
+            if (/Android/i.test(navigator.userAgent)) {
+                // Chrome Android répète le texte dans chaque résultat : le dernier contient toute la phrase
+                session = e.results[e.results.length - 1][0].transcript;
+            } else {
+                for (let i = 0; i < e.results.length; i++) session += e.results[i][0].transcript;
+            }
+            const current = `${committedRef.current} ${session}`.trim();
             setTranscript(current);
             transcriptRef.current = current;
 
+            // Langue reconnue : on enchaîne sans attendre
+            if (stepRef.current === 'listening_lang' && /(^|\s)(1|un|2|deux|3|trois|4|quatre|fran[cç]ais|dioula|jula|baoul[eé]|b[eé]t[eé])(\s|$)/i.test(current)) {
+                finishAnswer();
+                return;
+            }
+
             // Pause détection : l'utilisateur a arrêté de parler
-            if (current.length > 5) {
+            if (current.trim().length > 0) {
                 if ((window as any).silenceTimer) clearTimeout((window as any).silenceTimer);
-                (window as any).silenceTimer = setTimeout(() => stopListening(), 2500);
+                (window as any).silenceTimer = setTimeout(() => finishAnswer(), 2500);
             }
         };
 
-        recognition.onend = () => {
-            setIsRecording(false);
+        // Repose la question et relance l'écoute (setStep sur la même étape ne relancerait rien)
+        const reAsk = (msg: string) => speakText(msg, () => startListening());
+
+        let finalized = false;
+        const finalize = () => {
+            if (finalized || recognitionRef.current !== recognition) return;
+            finalized = true;
+            finalizeRef.current = null;
+
             const finalTranscript = transcriptRef.current.trim().toLowerCase();
-            if (!finalTranscript) return;
+            if (!finalTranscript) {
+                reAsk("Je n'ai rien entendu. Pouvez-vous répéter, puis appuyer sur le micro ?");
+                return;
+            }
 
             const currentStep = stepRef.current;
 
@@ -173,20 +221,14 @@ export default function TriagePage() {
             }
 
             // Extraction et validation stricte (10 chiffres)
-            const digits = finalTranscript.replace(/\D/g, '');
-            const phoneMatch = digits.match(/\d{10}/); // Doit faire 10 chiffres pile
-
-            if (!phoneMatch) {
+            const contact = extractContact(finalTranscript);
+            if (!contact) {
                 // Relance vocale si pas de numéro valide
-                const errorMsg = "Pardon, je n'ai pas bien saisi votre numéro. Il doit comporter 10 chiffres. Pouvez-vous me le répéter ?";
-                speakText(errorMsg, 'listening_contact');
+                reAsk("Pardon, je n'ai pas bien saisi votre numéro. Il doit comporter 10 chiffres. Pouvez-vous me le répéter ?");
                 return;
             }
 
-            const phone = phoneMatch[0];
-            // On considère que le reste c'est le nom (hors chiffres)
-            const name = finalTranscript.replace(/\d+/g, '').trim() || 'Anonyme';
-
+            const { name, phone } = contact;
             setPatientInfo({ name, phone });
 
             // On progresse automatiquement
@@ -194,11 +236,55 @@ export default function TriagePage() {
             speakText(confirmMsg, 'scanning');
         };
 
+        recognition.onend = () => {
+            activeRef.current = false;
+            setIsRecording(false);
+            if (recognitionRef.current !== recognition) return; // session abandonnée
+            // Le système coupe le micro après un silence : on relance en gardant le texte
+            if (shouldListenRef.current) {
+                committedRef.current = transcriptRef.current;
+                try {
+                    recognition.start();
+                    return;
+                } catch (e) {
+                    console.error('Triage: relance du micro impossible', e);
+                }
+            }
+            finalize();
+        };
+
+        finalizeRef.current = finalize;
         recognitionRef.current = recognition;
         recognition.start();
     }, []);
 
-    const stopListening = () => { if (recognitionRef.current) recognitionRef.current.stop(); setIsRecording(false); };
+    // Arrêt sans traitement (avant que l'IA parle) : on détache la session
+    const stopListening = () => {
+        shouldListenRef.current = false;
+        const recognition = recognitionRef.current;
+        recognitionRef.current = null;
+        finalizeRef.current = null;
+        if (recognition) {
+            try { recognition.stop(); } catch { /* déjà arrêtée */ }
+        }
+        setIsRecording(false);
+    };
+
+    // Fin de réponse (bouton micro ou silence) : on traite ce qui a été dit
+    const finishAnswer = () => {
+        shouldListenRef.current = false;
+        if ((window as any).silenceTimer) clearTimeout((window as any).silenceTimer);
+        const recognition = recognitionRef.current;
+        const wasActive = activeRef.current;
+        if (recognition && wasActive) {
+            try { recognition.stop(); } catch { /* déjà arrêtée */ }
+        }
+        // Si le système avait déjà coupé le micro, onend ne viendra pas : on traite directement
+        // On mémorise la session de CETTE réponse : la question suivante aura déjà remplacé finalizeRef
+        const pending = finalizeRef.current;
+        setTimeout(() => pending?.(), wasActive ? 1500 : 0);
+        setIsRecording(false);
+    };
 
     // ==========================================
     // CYCLE DE VIE VOCAL
@@ -217,7 +303,9 @@ export default function TriagePage() {
             const hospitalInfo = hospitalRecommendation ? `Rendez-vous immédiatement au ${hospitalRecommendation}, c'est le plus proche de vous.` : "";
             const msg = diagnosisData.diagnosis === 'danger'
                 ? `Attention ${patientInfo.name}, vos constantes sont critiques. Il y a une suspicion de ${diagnosisData.suspectedIllness}. ${hospitalInfo} Un agent de santé a été alerté.`
-                : `Merci ${patientInfo.name}, vos constantes ont été analysées. Diagnostic probable : ${diagnosisData.suspectedIllness}. Tout semble sous contrôle.`;
+                : diagnosisData.diagnosis === 'warning'
+                    ? `${patientInfo.name}, vos constantes montrent des signes à surveiller, peut-être ${diagnosisData.suspectedIllness}. Consultez ${hospitalRecommendation ? 'le ' + hospitalRecommendation : 'un centre de santé'} dans les 24 heures.`
+                    : `Merci ${patientInfo.name}, vos constantes ont été analysées. Elles ne montrent pas de signe de maladie grave.`;
             speakText(msg, 'success');
         }
     }, [step, diagnosisData, hospitalRecommendation]);
@@ -329,7 +417,7 @@ export default function TriagePage() {
                 )}
 
                 {/* 2. ETAPES VOCALES (IA PARLE) & ECOUTE CONTACT */}
-                {(step === 'greeting_vocal' || step === 'listening_contact' || step === 'result_vocal') && (
+                {(step === 'greeting_vocal' || step === 'listening_lang' || step === 'lang' || step === 'listening_contact' || step === 'result_vocal') && (
                     <div className="flex-1 flex flex-col items-center justify-center w-full animate-in zoom-in-95 duration-700">
                         <div className={`w-32 h-32 rounded-full flex items-center justify-center mb-6 relative animate-bounce
                             ${diagnosisData?.diagnosis === 'danger' && step === 'result_vocal' ? 'bg-keneya-red shadow-[0_0_40px_rgba(201,42,42,0.5)]' : 'bg-keneya-green shadow-[0_0_40px_rgba(70,131,62,0.5)]'}
@@ -341,18 +429,18 @@ export default function TriagePage() {
                             KENEYA <span className={diagnosisData?.diagnosis === 'danger' && step === 'result_vocal' ? "text-keneya-red-light" : "text-keneya-green-light"}>vous parle</span>
                         </h1>
                         <p className="text-base text-slate-400 font-medium text-center italic mb-8">
-                            {step === 'listening_contact' ? "Je vous écoute..." : "Écoutez l'instruction..."}
+                            {step === 'listening_contact' || step === 'listening_lang' ? "Je vous écoute..." : "Écoutez l'instruction..."}
                         </p>
 
                         {/* SECTION ECOUTE */}
-                        {step === 'listening_contact' && (
+                        {(step === 'listening_contact' || step === 'listening_lang') && (
                             <div className="w-full flex flex-col items-center">
-                                <button onClick={stopListening} className="relative flex items-center justify-center w-32 h-32 rounded-full bg-keneya-green-light text-white shadow-[0_0_50px_rgba(70,131,62,0.6)] group active:scale-95">
+                                <button onClick={finishAnswer} className="relative flex items-center justify-center w-32 h-32 rounded-full bg-keneya-green-light text-white shadow-[0_0_50px_rgba(70,131,62,0.6)] group active:scale-95">
                                     <div className="absolute inset-0 border-[4px] border-white/30 rounded-full animate-ping"></div>
                                     <Mic size={40} className="relative z-10" />
                                 </button>
                                 <div className="mt-8 bg-white/5 border border-white/10 backdrop-blur-md rounded-3xl p-6 w-full text-center relative overflow-hidden">
-                                    <span className="text-keneya-green-light font-black text-[9px] uppercase tracking-[0.2em] block mb-3">Transcription Nom & Tél</span>
+                                    <span className="text-keneya-green-light font-black text-[9px] uppercase tracking-[0.2em] block mb-3">{step === 'listening_lang' ? 'Choix de la langue' : 'Transcription Nom & Tél'}</span>
                                     <p className="text-lg text-white font-bold leading-relaxed">{transcript ? `"${transcript}"` : 'Attente de votre réponse...'}</p>
                                 </div>
                             </div>

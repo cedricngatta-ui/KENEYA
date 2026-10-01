@@ -5,7 +5,12 @@ import { Shield, ChevronLeft, Mic, MicOff, Check, Volume2 } from 'lucide-react';
 import Link from 'next/link';
 import { useLanguage } from '@/components/providers/LanguageProvider';
 import { saveReport } from '@/lib/reports';
+import { extractContact } from '@/lib/voice';
 import VoiceVisualizer from '@/components/ui/VoiceVisualizer';
+
+// "Oui", ou description du symptôme sans négation ("j'ai de la fièvre" oui, "pas de fièvre" non)
+const isYes = (text: string, symptoms: RegExp) =>
+    /oui|ouais/.test(text) || (!/(^|\s)(non|nan|pas)(\s|$)/.test(text) && symptoms.test(text));
 
 export default function SignalerFlow() {
     const { t, setUserLanguage } = useLanguage();
@@ -40,6 +45,11 @@ export default function SignalerFlow() {
     const recognitionRef = useRef<any>(null);
     const transcriptRef = useRef('');
     const shouldListenRef = useRef(false);
+    // Texte des sessions précédentes : Android coupe/relance le micro, il ne faut pas perdre ce qui a été dit
+    const committedRef = useRef('');
+    const activeRef = useRef(false);
+    // Traitement de la réponse en cours (appelé par onend ou par le bouton micro)
+    const finalizeRef = useRef<(() => void) | null>(null);
 
     const [coords, setCoords] = useState<{ lat: number, lng: number } | null>(null);
     const [gpsStatus, setGpsStatus] = useState<'idle' | 'requesting' | 'granted' | 'denied'>('idle');
@@ -72,17 +82,11 @@ export default function SignalerFlow() {
                     setCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
                     setGpsStatus('granted');
                     // Notification vocale de succès
-                    const successMsg = new SpeechSynthesisUtterance("Merci. Je commence à vous écouter.");
-                    successMsg.lang = 'fr-FR';
-                    successMsg.onend = () => setStep('ask_contact');
-                    window.speechSynthesis.speak(successMsg);
+                    speakText("Merci. Je commence à vous écouter.", 'ask_contact');
                 },
                 (err) => {
                     setGpsStatus('denied');
-                    const failMsg = new SpeechSynthesisUtterance("D'accord. Je commence à vous écouter.");
-                    failMsg.lang = 'fr-FR';
-                    failMsg.onend = () => setStep('ask_contact');
-                    window.speechSynthesis.speak(failMsg);
+                    speakText("D'accord. Je commence à vous écouter.", 'ask_contact');
                 },
                 { enableHighAccuracy: true, timeout: 8000 }
             );
@@ -158,9 +162,13 @@ export default function SignalerFlow() {
         const maxDuration = Math.max(8000, cleanText.length * 150);
         let safetyTimeout: any;
 
+        let advanced = false;
         const advance = () => {
+            if (advanced) return;
+            advanced = true;
             clearTimeout(safetyTimeout);
-            if (nextStep === 'end') setStep('success');
+            if (typeof nextStep === 'function') nextStep();
+            else if (nextStep === 'end') setStep('success');
             else setStep(nextStep);
         };
 
@@ -188,9 +196,27 @@ export default function SignalerFlow() {
         const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
         if (!SpeechRecognition) return;
         const recognition = recognitionRef.current; // Use the ref to stop the active recognition
+        // On détache la session : son onend ne doit plus traiter de réponse
+        recognitionRef.current = null;
+        finalizeRef.current = null;
         if (recognition) {
-            recognition.stop();
+            try { recognition.stop(); } catch { /* déjà arrêtée */ }
         }
+        setIsRecording(false);
+    }, []);
+
+    // Fin de réponse (bouton micro ou détection automatique) : on traite ce qui a été dit
+    const finishAnswer = useCallback(() => {
+        shouldListenRef.current = false;
+        if ((window as any).silenceTimer) clearTimeout((window as any).silenceTimer);
+        const recognition = recognitionRef.current;
+        if (recognition && activeRef.current) {
+            try { recognition.stop(); } catch { /* déjà arrêtée */ }
+        }
+        // Si le micro était déjà coupé par le système, onend ne viendra pas : on traite directement
+        // On mémorise la session de CETTE réponse : la question suivante aura déjà remplacé finalizeRef
+        const pending = finalizeRef.current;
+        setTimeout(() => pending?.(), activeRef.current ? 1500 : 0);
         setIsRecording(false);
     }, []);
 
@@ -208,6 +234,12 @@ export default function SignalerFlow() {
             return;
         }
 
+        // Nouvelle question : on repart d'une transcription vide
+        if ((window as any).silenceTimer) clearTimeout((window as any).silenceTimer);
+        transcriptRef.current = '';
+        committedRef.current = '';
+        setTranscript('');
+
         const recognition = new SpeechRecognition();
         recognitionRef.current = recognition;
         recognition.lang = 'fr-FR';
@@ -223,10 +255,16 @@ export default function SignalerFlow() {
             }
         };
 
-        recognition.onstart = () => { setIsRecording(true); setTranscript(''); transcriptRef.current = ''; };
+        recognition.onstart = () => { activeRef.current = true; setIsRecording(true); };
         recognition.onresult = (e: any) => {
-            let current = '';
-            for (let i = 0; i < e.results.length; i++) current += e.results[i][0].transcript;
+            let session = '';
+            if (/Android/i.test(navigator.userAgent)) {
+                // Chrome Android répète le texte dans chaque résultat : le dernier contient toute la phrase
+                session = e.results[e.results.length - 1][0].transcript;
+            } else {
+                for (let i = 0; i < e.results.length; i++) session += e.results[i][0].transcript;
+            }
+            const current = `${committedRef.current} ${session}`.trim();
             const liveText = current.toLowerCase();
             setTranscript(current);
             transcriptRef.current = current;
@@ -241,67 +279,60 @@ export default function SignalerFlow() {
                 // Dès qu'une langue est détectée dans les résultats intermédiaires,
                 // on coupe le micro pour enchaîner sans délai
                 if (isFr || isDioula || isBaoule || isBete) {
-                    stopListening();
+                    finishAnswer();
                     return; // Empêcher les appels multiples sur les résultats intermédiaires suivants
                 }
             }
             // Détection Oui/Non pour les questions fermées
             else if (target.startsWith('listen_') && target !== 'listen_other' && target !== 'listen_details' && target !== 'listen_contact') {
                 if (liveText.includes('oui') || liveText.includes('non') || liveText.includes('ouais') || liveText.includes('nan')) {
-                    stopListening(); // Instantané
+                    finishAnswer(); // Instantané
                     return;
+                }
+                // Réponse en phrase libre ("j'ai de la fièvre") : fin après un silence
+                if (liveText.trim().length > 0) {
+                    if ((window as any).silenceTimer) clearTimeout((window as any).silenceTimer);
+                    (window as any).silenceTimer = setTimeout(() => finishAnswer(), 2500);
                 }
             }
             // Détection de pause pour les questions ouvertes ou recueil contact
             else if (target === 'listen_other' || target === 'listen_details' || target === 'listen_contact') {
                 // "Non" / "rien" à la question des autres symptômes : on enchaîne sans attendre
                 if (target === 'listen_other' && /^\s*(non|nan|rien)\b/.test(liveText)) {
-                    stopListening();
+                    finishAnswer();
                     return;
                 }
                 if (liveText.trim().length > 0) {
                     if ((window as any).silenceTimer) clearTimeout((window as any).silenceTimer);
-                    (window as any).silenceTimer = setTimeout(() => stopListening(), 2500);
+                    (window as any).silenceTimer = setTimeout(() => finishAnswer(), 2500);
                 }
             }
         };
 
-        recognition.onend = () => {
-            setIsRecording(false);
+        // Repose la même question et relance l'écoute (setStep sur la même étape ne relancerait rien)
+        const reAsk = (msg: string) => speakText(msg, () => startListening(target));
 
-            // PWA / Mobile Optimization: Redémarrage automatique si le système est censé écouter
-            // mais s'est arrêté prématurément (silence long, timeout OS, etc.)
-            if (shouldListenRef.current) {
-                console.log("PWA: Restarting recognition for persistence...");
-                try {
-                    recognition.start();
-                    return;
-                } catch (e) {
-                    console.error("PWA: Failed to restart recognition:", e);
-                }
-            }
+        let finalized = false;
+        const finalize = () => {
+            if (finalized || recognitionRef.current !== recognition) return;
+            finalized = true;
+            finalizeRef.current = null;
 
             const finalTranscript = transcriptRef.current.trim().toLowerCase();
-            if (!finalTranscript) return;
+            if (!finalTranscript) {
+                reAsk("Je n'ai rien entendu. Pouvez-vous répéter, puis appuyer sur le micro ?");
+                return;
+            }
 
             if (target === 'listen_contact') {
-                const digits = finalTranscript.replace(/\D/g, '');
-                const phoneMatch = digits.match(/\d{10}/);
-
-                if (!phoneMatch) {
-                    const errorMsg = "Pardon, je n'ai pas bien saisi votre numéro. Il doit comporter 10 chiffres. Pouvez-vous me le répéter ?";
-                    speakText(errorMsg, 'listening_contact');
+                const contact = extractContact(finalTranscript);
+                if (!contact) {
+                    reAsk("Pardon, je n'ai pas bien saisi votre numéro. Il doit comporter 10 chiffres. Pouvez-vous me le répéter ?");
                     return;
                 }
 
-                const phone = phoneMatch[0];
-                // Extraction du premier nom/prénom
-                let rawName = finalTranscript.replace(/\d+/g, '').trim() || 'Citoyen';
-                const firstName = rawName.split(' ')[0];
-                const cleanName = firstName.charAt(0).toUpperCase() + firstName.slice(1).toLowerCase();
-
-                setPatientName(cleanName);
-                setPatientPhone(phone);
+                setPatientName(contact.name);
+                setPatientPhone(contact.phone);
                 setStep('ask_vitals'); // Vers la biométrie après le contact
                 return;
             }
@@ -328,19 +359,19 @@ export default function SignalerFlow() {
                 setStep('lang');
             }
             else if (target === 'listen_fever') {
-                if (finalTranscript.includes('oui') || finalTranscript.includes('ouais')) {
+                if (isYes(finalTranscript, /fi[eè]vre|chaud|t[eê]te/)) {
                     setDetectedSymptoms(prev => [...prev, 'fievre']);
                 }
                 setStep('ask_digestive');
             }
             else if (target === 'listen_digestive') {
-                if (finalTranscript.includes('oui') || finalTranscript.includes('ouais') || finalTranscript.includes('vomiss') || finalTranscript.includes('diarrh')) {
+                if (isYes(finalTranscript, /vomi|diarrh|ventre/)) {
                     setDetectedSymptoms(prev => [...prev, 'digestif']);
                 }
                 setStep('ask_rash');
             }
             else if (target === 'listen_rash') {
-                if (finalTranscript.includes('oui') || finalTranscript.includes('ouais') || finalTranscript.includes('bouton') || finalTranscript.includes('plaqu')) {
+                if (isYes(finalTranscript, /bouton|plaqu|rouge|gratte/)) {
                     setDetectedSymptoms(prev => [...prev, 'eruptif']);
                 }
                 setStep('ask_other');
@@ -433,6 +464,26 @@ export default function SignalerFlow() {
             }
         };
 
+        recognition.onend = () => {
+            activeRef.current = false;
+            setIsRecording(false);
+            if (recognitionRef.current !== recognition) return; // session abandonnée
+
+            // PWA / Mobile : le système coupe le micro après un silence, on relance
+            // en gardant ce qui a déjà été dit
+            if (shouldListenRef.current) {
+                committedRef.current = transcriptRef.current;
+                try {
+                    recognition.start();
+                    return;
+                } catch (e) {
+                    console.error("PWA: Failed to restart recognition:", e);
+                }
+            }
+            finalize();
+        };
+
+        finalizeRef.current = finalize;
         recognitionRef.current = recognition;
         recognition.start();
         // coords, nom, diagnostic : lus dans onend, doivent être à jour au moment de l'écoute
@@ -640,7 +691,7 @@ export default function SignalerFlow() {
                         </div>
 
                         <button
-                            onClick={stopListening}
+                            onClick={finishAnswer}
                             className="relative flex items-center justify-center w-36 h-36 rounded-full bg-keneya-red text-white shadow-[0_0_60px_rgba(201,42,42,0.4)] group active:scale-95 transition-transform"
                         >
                             <div className="absolute inset-0 border-[4px] border-white/20 rounded-full animate-ping"></div>

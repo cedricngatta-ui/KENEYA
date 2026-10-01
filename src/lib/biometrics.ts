@@ -12,6 +12,8 @@ const _fetch = async (endpoint: string, options: RequestInit = {}) => {
     try {
         const res = await fetch(`${API_URL}${endpoint}`, {
             headers: { "Content-Type": "application/json", "X-API-Key": API_KEY },
+            // Le scan ne doit jamais rester bloqué si l'API externe ne répond pas
+            signal: AbortSignal.timeout(5000),
             ...options,
         });
         const data = await res.json();
