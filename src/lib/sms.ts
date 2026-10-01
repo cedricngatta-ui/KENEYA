@@ -45,7 +45,10 @@ export async function sendSMS(telephone: string, message: string) {
             body: params.toString(),
         });
 
-        const result = await response.json();
+        // HSMS peut renvoyer du texte brut en cas d'erreur
+        const raw = await response.text();
+        let result: unknown = raw;
+        try { result = JSON.parse(raw); } catch { /* réponse non JSON */ }
 
         if (!response.ok) {
             console.error("Erreur HSMS.CI:", result);

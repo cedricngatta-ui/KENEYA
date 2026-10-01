@@ -1,10 +1,13 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
+import { requireRole } from '@/lib/auth/requireRole';
 
-export const runtime = 'edge';
 
 export async function GET(req: Request) {
     try {
+        const auth = await requireRole(['admin']);
+        if (!auth.ok) return auth.response;
+
         const supabaseAdmin = getSupabaseAdmin();
         const { searchParams } = new URL(req.url);
         const zone = searchParams.get('zone');

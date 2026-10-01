@@ -51,10 +51,18 @@ export class OfficialDataService {
         // Simulation d'une latence réseau pour le fetch
         await new Promise(resolve => setTimeout(resolve, 800));
 
-        const match = MOCK_OFFICIAL_ALERTS.find(alert =>
-            alert.disease.toLowerCase().includes(disease.toLowerCase()) &&
-            (zone.toLowerCase().includes(alert.zone.toLowerCase()) || alert.zone === 'Toute la Côte d\'Ivoire')
-        );
+        const d = disease.toLowerCase();
+        const z = zone.toLowerCase();
+        if (!d || !z) return null;
+
+        // La zone officielle est plus précise (ex: "Abidjan (Cocody, Plateau)") : on teste dans les deux sens
+        const match = MOCK_OFFICIAL_ALERTS.find(alert => {
+            const ad = alert.disease.toLowerCase();
+            const az = alert.zone.toLowerCase();
+            const diseaseMatch = ad.includes(d) || d.includes(ad);
+            const zoneMatch = az.includes(z) || z.includes(az) || alert.zone === 'Toute la Côte d\'Ivoire';
+            return diseaseMatch && zoneMatch;
+        });
 
         return match || null;
     }

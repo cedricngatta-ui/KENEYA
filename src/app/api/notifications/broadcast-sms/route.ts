@@ -1,13 +1,16 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { sendSMS } from '@/lib/sms';
+import { requireRole, ALL_PRO_ROLES } from '@/lib/auth/requireRole';
 
-export const runtime = 'edge';
 
 export async function POST(req: Request) {
     try {
+        const auth = await requireRole(ALL_PRO_ROLES);
+        if (!auth.ok) return auth.response;
+
         const body = await req.json();
-        const { zone, message, senderId, specificNumbers } = body;
+        const { zone, message, specificNumbers } = body;
 
         if (!message || (!zone && !specificNumbers)) {
             return NextResponse.json({ error: "Message ou cible manquants." }, { status: 400 });
@@ -17,7 +20,7 @@ export async function POST(req: Request) {
 
         let targetPhones: string[] = [];
 
-        if (specificNumbers && specificNumbers.trim() !== '') {
+        if (typeof specificNumbers === 'string' && specificNumbers.trim() !== '') {
             // Bypass Base de Données : on utilise les numéros saisis par le frontend
             targetPhones = specificNumbers
                 .split(',')
@@ -75,13 +78,11 @@ export async function POST(req: Request) {
         }
 
         // 4. Trace dans la base de données
-        const { data: userData } = await supabase.auth.getUser();
-
         await (supabase as any).from('broadcasts').insert({
             channel: 'sms',
             zone: zone,
             message: message,
-            sent_by: senderId || userData?.user?.id || null,
+            sent_by: auth.user.id,
         });
 
         return NextResponse.json({

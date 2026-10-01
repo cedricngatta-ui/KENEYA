@@ -1,17 +1,23 @@
 import { NextResponse } from 'next/server';
 import { sendSMS } from '@/lib/sms';
 import { createClient } from '@/lib/supabase/server';
+import { requireRole, ALL_PRO_ROLES } from '@/lib/auth/requireRole';
 
-export const runtime = 'edge';
 
 export async function POST(request: Request) {
     try {
+        const auth = await requireRole(ALL_PRO_ROLES);
+        if (!auth.ok) return auth.response;
+
         const body = await request.json();
         const { phoneNumber, message, notifyAgents } = body;
 
         // 1. Envoi à un numéro spécifique (ex: le patient)
         if (phoneNumber && message) {
-            await sendSMS(phoneNumber, message);
+            const result = await sendSMS(phoneNumber, message);
+            if (!result.success) {
+                return NextResponse.json({ error: "Échec d'envoi du SMS au patient." }, { status: 502 });
+            }
         }
 
         // 2. Envoi aux agents sélectionnés (Admins et Agents de terrain)

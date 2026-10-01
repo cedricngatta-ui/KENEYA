@@ -1,10 +1,17 @@
 import { NextResponse } from 'next/server';
 
-export const runtime = 'edge';
 
 export async function POST(req: Request) {
     try {
         const { text, voiceId = 'pNInz6obpgnuM07kgL4L' } = await req.json(); // Adam voice by default
+
+        // Limite la taille pour éviter les abus de quota ElevenLabs
+        if (typeof text !== 'string' || !text.trim() || text.length > 1000) {
+            return NextResponse.json({ error: "Texte invalide (1 à 1000 caractères)" }, { status: 400 });
+        }
+        if (typeof voiceId !== 'string' || !/^[A-Za-z0-9]{10,40}$/.test(voiceId)) {
+            return NextResponse.json({ error: "voiceId invalide" }, { status: 400 });
+        }
 
         const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
 
@@ -29,15 +36,14 @@ export async function POST(req: Request) {
         });
 
         if (!response.ok) {
-            const error = await response.json();
-            console.error("ElevenLabs Error:", error);
+            const error = await response.text();
+            console.error("ElevenLabs Error:", response.status, error);
             throw new Error('ElevenLabs API failed');
         }
 
         const arrayBuffer = await response.arrayBuffer();
-        const buffer = Buffer.from(arrayBuffer);
 
-        return new Response(buffer, {
+        return new Response(arrayBuffer, {
             headers: {
                 'Content-Type': 'audio/mpeg',
             },

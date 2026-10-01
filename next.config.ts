@@ -1,9 +1,14 @@
 import type { NextConfig } from "next";
 import withPWAInit from "@ducanh2912/next-pwa";
+import { initOpenNextCloudflareForDev } from "@opennextjs/cloudflare";
+
+// Donne accès aux bindings Cloudflare pendant `next dev`
+initOpenNextCloudflareForDev();
 
 const withPWA = withPWAInit({
   dest: "public",
-  disable: false, // Reactivé pour le test local de l'installation PWA
+  // Le plugin PWA passe par webpack : désactivé en dev (Turbopack), actif au build (`next build --webpack`)
+  disable: process.env.NODE_ENV === "development",
   register: true,
 });
 

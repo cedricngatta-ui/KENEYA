@@ -1,10 +1,13 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/admin';
+import { requireRole } from '@/lib/auth/requireRole';
 
-export const runtime = 'edge';
 
 export async function POST() {
     try {
+        const auth = await requireRole(['admin']);
+        if (!auth.ok) return auth.response;
+
         const supabaseAdmin = getSupabaseAdmin();
         // 1. Récupération du seuil de configuration
         const { data: configData } = await supabaseAdmin
@@ -13,7 +16,8 @@ export async function POST() {
             .eq('key', 'alert_threshold')
             .single();
 
-        const threshold = configData ? parseInt((configData as any).value) : 5;
+        const parsedThreshold = configData ? parseInt((configData as any).value, 10) : NaN;
+        const threshold = Number.isFinite(parsedThreshold) && parsedThreshold > 0 ? parsedThreshold : 5;
 
         // 2. Récupération des rapports des dernières 48 heures
         const fortyEightHoursAgo = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
@@ -59,11 +63,11 @@ export async function POST() {
                         .eq('geo_cell', zone)
                         .eq('syndrome', syndrome)
                         .eq('status', 'active')
-                        .single();
+                        .maybeSingle();
 
                     if (existingCluster) {
                         // Update score
-                        await supabaseAdmin
+                        const { error: updateError } = await supabaseAdmin
                             .from('clusters')
                             .update({
                                 score: count,
@@ -71,9 +75,10 @@ export async function POST() {
                                 time_window: 'Dernières 48h'
                             })
                             .eq('id', existingCluster.id);
+                        if (updateError) throw updateError;
                     } else {
                         // Création
-                        await supabaseAdmin
+                        const { error: insertError } = await supabaseAdmin
                             .from('clusters')
                             .insert({
                                 geo_cell: zone,
@@ -82,6 +87,7 @@ export async function POST() {
                                 status: 'active',
                                 time_window: 'Dernières 48h'
                             });
+                        if (insertError) throw insertError;
                         clustersCreated++;
                     }
                     results.push({ zone, syndrome, count });

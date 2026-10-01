@@ -1,9 +1,12 @@
 import { NextResponse } from 'next/server';
+import { requireRole, ALL_PRO_ROLES } from '@/lib/auth/requireRole';
 
-export const runtime = 'edge';
 
 export async function POST(req: Request) {
     try {
+        const auth = await requireRole(ALL_PRO_ROLES);
+        if (!auth.ok) return auth.response;
+
         const body = await req.json();
         const { patientName, gender, symptoms, severity, hospitalName, language } = body;
 

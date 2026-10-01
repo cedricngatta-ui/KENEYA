@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server';
 import { OfficialDataService } from '@/services/OfficialDataService';
 import { createClient } from '@supabase/supabase-js';
 
-export const runtime = 'edge';
 
 // Type attendu du Frontend
 interface TriageRequest {
@@ -24,6 +23,9 @@ interface TriageResponse {
 export async function POST(req: Request) {
     try {
         const body: TriageRequest = await req.json();
+        if (typeof body?.transcript !== 'string' || !body.transcript.trim()) {
+            return NextResponse.json({ error: 'Description des symptômes requise.' }, { status: 400 });
+        }
         const text = body.transcript.toLowerCase();
 
         // 1. Detection du syndrome et de la gravité selon les mots-clés de la Base de Données
@@ -51,14 +53,14 @@ export async function POST(req: Request) {
 
         if (dbDiseases && dbDiseases.length > 0) {
             // Trie par sévérité pour que les urgences ROUGES priment
-            const sortedDiseases = dbDiseases.sort((a: any, b: any) => {
+            const sortedDiseases = [...dbDiseases].sort((a: any, b: any) => {
                 if (a.severity_level === 'rouge' && b.severity_level !== 'rouge') return -1;
                 if (b.severity_level === 'rouge' && a.severity_level !== 'rouge') return 1;
                 return 0;
             });
 
             for (const disease of sortedDiseases) {
-                const keywords = disease.keywords || [];
+                const keywords: string[] = Array.isArray(disease.keywords) ? disease.keywords : [];
                 // Cherche si un des mots clés de la maladie est dans la transcription
                 const hasMatch = keywords.some((keyword: string) => text.includes(keyword.toLowerCase()));
 
@@ -111,9 +113,6 @@ export async function POST(req: Request) {
             targetHospital: hospital,
             officialAlertMatch: officialMatch
         };
-
-        // Délai simulé
-        await new Promise(resolve => setTimeout(resolve, 1500));
 
         return NextResponse.json(mockResponse);
 
