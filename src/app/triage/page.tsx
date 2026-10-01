@@ -4,7 +4,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { Shield, ChevronLeft, Fingerprint, Activity, User, Phone, CheckCircle2, Volume2, Mic } from 'lucide-react';
 import Link from 'next/link';
 import BioScanner from '@/components/dashboard/BioScanner';
-import { createClient } from '@/lib/supabase/client';
+import { saveReport } from '@/lib/reports';
 import { useLanguage } from '@/components/providers/LanguageProvider';
 
 export default function TriagePage() {
@@ -243,11 +243,11 @@ export default function TriagePage() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ transcript: virtualSymptom })
             });
+            if (!res.ok) throw new Error(`Triage HTTP ${res.status}`);
             const data = await res.json();
             setDiagnosisData(data);
 
             const saveTriageReport = async () => {
-                const supabase = createClient();
                 const currentCoords = coords;
 
                 // Détermination de l'hôpital si on a la position
@@ -271,7 +271,7 @@ export default function TriagePage() {
                     },
                     geo_cell: 'Abidjan-Triage'
                 };
-                await (supabase.from('reports') as any).insert(payload);
+                await saveReport(payload);
 
                 setStep('result_vocal'); // On lance l'annonce vocale du résultat
             };

@@ -3,6 +3,19 @@ import { OfficialDataService } from '@/services/OfficialDataService';
 import { createClient } from '@supabase/supabase-js';
 
 
+// Maladies par défaut (mêmes que supabase/create_diseases_table.sql).
+// Utilisées en mode démo sans Supabase, ou si la table est vide / non lisible (RLS).
+const DEFAULT_DISEASES = [
+    { name: 'Urgence vitale', keywords: ['respirer', 'étouffe', 'inconscient', 'évanoui', 'convulsion'], severity_level: 'rouge' },
+    { name: 'Choléra', keywords: ['diarrhée', 'eau de riz', 'vomissement', 'vomis', 'déshydratation', 'soif'], severity_level: 'rouge' },
+    { name: 'Mpox / Variole', keywords: ['bouton', 'éruption', 'peau', 'rash', 'rougeole', 'ganglion'], severity_level: 'rouge' },
+    { name: 'Fièvre Lassa', keywords: ['saigne', 'sang', 'fièvre forte', 'yeux rouges'], severity_level: 'rouge' },
+    { name: 'Méningite', keywords: ['nuque', 'raideur'], severity_level: 'rouge' },
+    { name: 'Paludisme Sévère', keywords: ['palu', 'moustique', 'chaud', 'grelotte', 'frisson', 'anémie'], severity_level: 'jaune' },
+    { name: 'Dengue', keywords: ['douleur', 'articulation', 'fièvre', 'tête'], severity_level: 'jaune' },
+    { name: 'Infection respiratoire', keywords: ['toux', 'tousse', 'rhume', 'gorge'], severity_level: 'jaune' },
+];
+
 // Type attendu du Frontend
 interface TriageRequest {
     transcript: string; // Ce que l'utilisateur a dit (ex: "J'ai mal à la tête et je vomis du sang")
@@ -51,45 +64,37 @@ export async function POST(req: Request) {
             }
         }
 
-        if (dbDiseases && dbDiseases.length > 0) {
-            // Trie par sévérité pour que les urgences ROUGES priment
-            const sortedDiseases = [...dbDiseases].sort((a: any, b: any) => {
-                if (a.severity_level === 'rouge' && b.severity_level !== 'rouge') return -1;
-                if (b.severity_level === 'rouge' && a.severity_level !== 'rouge') return 1;
-                return 0;
-            });
+        const diseases = dbDiseases && dbDiseases.length > 0 ? dbDiseases : DEFAULT_DISEASES;
+        // Trie par sévérité pour que les urgences ROUGES priment
+        const sortedDiseases = [...diseases].sort((a: any, b: any) => {
+            if (a.severity_level === 'rouge' && b.severity_level !== 'rouge') return -1;
+            if (b.severity_level === 'rouge' && a.severity_level !== 'rouge') return 1;
+            return 0;
+        });
 
-            for (const disease of sortedDiseases) {
-                const keywords: string[] = Array.isArray(disease.keywords) ? disease.keywords : [];
-                // Cherche si un des mots clés de la maladie est dans la transcription
-                const hasMatch = keywords.some((keyword: string) => text.includes(keyword.toLowerCase()));
+        for (const disease of sortedDiseases) {
+            const keywords: string[] = Array.isArray(disease.keywords) ? disease.keywords : [];
+            // Cherche si un des mots clés de la maladie est dans la transcription
+            const hasMatch = keywords.some((keyword: string) => text.includes(keyword.toLowerCase()));
 
-                if (hasMatch) {
-                    illness = disease.name;
-                    syndrome = 'unknown'; // Pourrait être enrichi dans la DB
+            if (hasMatch) {
+                illness = disease.name;
+                syndrome = 'unknown'; // Pourrait être enrichi dans la DB
 
-                    if (disease.severity_level === 'rouge') {
-                        diagnosis = 'danger';
-                        reasoning = `Détection d'un mot-clé critique associé à : ${disease.name}.`;
-                        instructions = ["URGENCE ABSOLUE : Rendez-vous à l'hôpital immédiatement", "Évitez les contacts étroits"];
-                    } else if (disease.severity_level === 'jaune') {
-                        diagnosis = 'warning';
-                        reasoning = `Symptôme suspect correspondant à : ${disease.name}.`;
-                        instructions = ["Consultez un centre de santé dans les 24h", "Surveillez l'évolution"];
-                    } else {
-                        diagnosis = 'safe';
-                        instructions = ["Repos recommandé"];
-                    }
-
-                    break; // On s'arrête à la maladie la plus grave trouvée
+                if (disease.severity_level === 'rouge') {
+                    diagnosis = 'danger';
+                    reasoning = `Détection d'un mot-clé critique associé à : ${disease.name}.`;
+                    instructions = ["URGENCE ABSOLUE : Rendez-vous à l'hôpital immédiatement", "Évitez les contacts étroits"];
+                } else if (disease.severity_level === 'jaune') {
+                    diagnosis = 'warning';
+                    reasoning = `Symptôme suspect correspondant à : ${disease.name}.`;
+                    instructions = ["Consultez un centre de santé dans les 24h", "Surveillez l'évolution"];
+                } else {
+                    diagnosis = 'safe';
+                    instructions = ["Repos recommandé"];
                 }
-            }
-        } else {
-            // Fallback (Base vide ou erreur) - Traitement minimal
-            if (text.includes('sang') || text.includes('respirer') || text.includes('inconscient')) {
-                diagnosis = 'danger';
-                illness = 'Urgence Critique Possible';
-                instructions = ["Appelez ou rendez-vous aux urgences."];
+
+                break; // On s'arrête à la maladie la plus grave trouvée
             }
         }
 

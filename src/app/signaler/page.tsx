@@ -4,7 +4,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { Shield, ChevronLeft, Mic, MicOff, Check, Volume2 } from 'lucide-react';
 import Link from 'next/link';
 import { useLanguage } from '@/components/providers/LanguageProvider';
-import { createClient } from '@/lib/supabase/client';
+import { saveReport } from '@/lib/reports';
 import VoiceVisualizer from '@/components/ui/VoiceVisualizer';
 
 export default function SignalerFlow() {
@@ -339,7 +339,10 @@ export default function SignalerFlow() {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ transcript: finalSymptoms.join(', ') })
                 })
-                    .then(res => res.json())
+                    .then(res => {
+                        if (!res.ok) throw new Error(`Triage HTTP ${res.status}`);
+                        return res.json();
+                    })
                     .then(data => {
                         setDiagnosis(data.diagnosis);
                         setSuspectedIllness(data.suspectedIllness);
@@ -350,7 +353,6 @@ export default function SignalerFlow() {
                             setStep('ask_details');
                         } else {
                             const saveReportWithoutDetails = async () => {
-                                const supabase = createClient();
                                 const currentCoords = coords;
 
                                 if (currentCoords) {
@@ -368,17 +370,24 @@ export default function SignalerFlow() {
                                     geo_cell: currentCoords ? getGeoCellFromCoords(currentCoords.lat, currentCoords.lng) : 'ESATIC Treichville (Simulé)',
                                     metadata: currentCoords ? { lat: currentCoords.lat, lng: currentCoords.lng, source: 'vocal' } : { source: 'vocal' }
                                 };
-                                await (supabase.from('reports') as any).insert(payload);
+                                await saveReport(payload);
                                 setStep('result_vocal');
                             };
                             saveReportWithoutDetails();
                         }
+                    })
+                    .catch(err => {
+                        // Analyse indisponible : on donne un conseil prudent plutôt que de bloquer l'écran
+                        console.error('Erreur triage:', err);
+                        setDiagnosis('warning');
+                        setSuspectedIllness('Analyse indisponible');
+                        setInstructions(["Rendez-vous dans le centre de santé le plus proche si les symptômes persistent."]);
+                        setStep('result_vocal');
                     });
             }
             else if (target === 'listen_details') {
                 const finalTranscript = transcriptRef.current.trim().toLowerCase();
                 const saveFinalReport = async () => {
-                    const supabase = createClient();
                     const currentCoords = coords;
 
                     if (currentCoords) {
@@ -396,7 +405,7 @@ export default function SignalerFlow() {
                         geo_cell: currentCoords ? getGeoCellFromCoords(currentCoords.lat, currentCoords.lng) : 'ESATIC Treichville (Simulé)',
                         metadata: currentCoords ? { lat: currentCoords.lat, lng: currentCoords.lng, source: 'vocal_details' } : { source: 'vocal_details' }
                     };
-                    await (supabase.from('reports') as any).insert(payload);
+                    await saveReport(payload);
 
                     setStep('result_vocal');
                 };
