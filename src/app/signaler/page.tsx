@@ -58,7 +58,15 @@ export default function SignalerFlow() {
 
         const utterance = new SpeechSynthesisUtterance(msg);
         utterance.lang = 'fr-FR';
-        utterance.onend = () => {
+        let gpsStarted = false;
+        const askPosition = () => {
+            if (gpsStarted) return;
+            gpsStarted = true;
+            if (!navigator.geolocation) {
+                setGpsStatus('denied');
+                setStep('ask_contact');
+                return;
+            }
             navigator.geolocation.getCurrentPosition(
                 (pos) => {
                     setCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
@@ -79,6 +87,10 @@ export default function SignalerFlow() {
                 { enableHighAccuracy: true, timeout: 8000 }
             );
         };
+        // Secours : certains navigateurs ne déclenchent jamais onend
+        setTimeout(askPosition, Math.max(8000, msg.length * 150));
+        utterance.onend = askPosition;
+        utterance.onerror = askPosition;
         window.speechSynthesis.speak(utterance);
     };
 
@@ -191,7 +203,10 @@ export default function SignalerFlow() {
         }
 
         const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-        if (!SpeechRecognition) return;
+        if (!SpeechRecognition) {
+            speakText("Votre navigateur ne permet pas la reconnaissance vocale. Veuillez ouvrir Keneya avec Google Chrome.", 'intro');
+            return;
+        }
 
         const recognition = new SpeechRecognition();
         recognitionRef.current = recognition;
@@ -239,7 +254,12 @@ export default function SignalerFlow() {
             }
             // Détection de pause pour les questions ouvertes ou recueil contact
             else if (target === 'listen_other' || target === 'listen_details' || target === 'listen_contact') {
-                if (liveText.length > 5) {
+                // "Non" / "rien" à la question des autres symptômes : on enchaîne sans attendre
+                if (target === 'listen_other' && /^\s*(non|nan|rien)\b/.test(liveText)) {
+                    stopListening();
+                    return;
+                }
+                if (liveText.trim().length > 0) {
                     if ((window as any).silenceTimer) clearTimeout((window as any).silenceTimer);
                     (window as any).silenceTimer = setTimeout(() => stopListening(), 2500);
                 }
@@ -337,7 +357,7 @@ export default function SignalerFlow() {
                 fetch('/api/triage', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ transcript: finalSymptoms.join(', ') })
+                    body: JSON.stringify({ transcript: finalSymptoms.join(', ') || 'aucun symptome' })
                 })
                     .then(res => {
                         if (!res.ok) throw new Error(`Triage HTTP ${res.status}`);
@@ -415,7 +435,8 @@ export default function SignalerFlow() {
 
         recognitionRef.current = recognition;
         recognition.start();
-    }, [detectedSymptoms]);
+        // coords, nom, diagnostic : lus dans onend, doivent être à jour au moment de l'écoute
+    }, [detectedSymptoms, coords, patientName, patientPhone, diagnosis, suspectedIllness]);
 
 
 
@@ -504,9 +525,14 @@ export default function SignalerFlow() {
                 ? `Veuillez vous rendre immédiatement au centre de santé le plus proche : le ${hospitalRecommendation}. C'est très important pour votre sécurité.`
                 : `Veuillez vous rendre dans le centre de santé le plus proche de chez vous sans tarder.`;
 
+            const centre = hospitalRecommendation ? `le ${hospitalRecommendation}` : 'le centre de santé le plus proche';
+
+            // Message adapté à la gravité : ne pas envoyer "immédiatement" à l'hôpital une personne sans signe grave
             const msg = diagnosis === 'danger'
                 ? `Attention ${patientName}, une suspicion de ${suspectedIllness} a été détectée. ${hospitalInfo} Un agent de santé a été alerté.`
-                : `${patientName}, d'après vos symptômes, il s'agit probablement de ${suspectedIllness}. ${hospitalInfo} ${instructions.join(' ')}`;
+                : diagnosis === 'warning'
+                    ? `${patientName}, d'après vos symptômes, il s'agit peut-être de ${suspectedIllness}. Consultez ${centre} dans les 24 heures. ${instructions.join(' ')}`
+                    : `${patientName}, vos réponses ne montrent pas de signe de maladie grave. ${instructions.join(' ')} Si vous ne vous sentez pas mieux, consultez ${centre}.`;
             speakText(msg, 'end');
         }
     }, [step, diagnosis, suspectedIllness, instructions, hospitalRecommendation, patientName, t]);

@@ -7,14 +7,17 @@ import { createClient } from '@supabase/supabase-js';
 // Utilisées en mode démo sans Supabase, ou si la table est vide / non lisible (RLS).
 const DEFAULT_DISEASES = [
     { name: 'Urgence vitale', keywords: ['respirer', 'étouffe', 'inconscient', 'évanoui', 'convulsion'], severity_level: 'rouge' },
-    { name: 'Choléra', keywords: ['diarrhée', 'eau de riz', 'vomissement', 'vomis', 'déshydratation', 'soif'], severity_level: 'rouge' },
-    { name: 'Mpox / Variole', keywords: ['bouton', 'éruption', 'peau', 'rash', 'rougeole', 'ganglion'], severity_level: 'rouge' },
+    { name: 'Choléra', keywords: ['digestif', 'diarrhée', 'eau de riz', 'vomissement', 'vomis', 'déshydratation', 'soif'], severity_level: 'rouge' },
+    { name: 'Mpox / Variole', keywords: ['eruptif', 'bouton', 'éruption', 'peau', 'rash', 'rougeole', 'ganglion'], severity_level: 'rouge' },
     { name: 'Fièvre Lassa', keywords: ['saigne', 'sang', 'fièvre forte', 'yeux rouges'], severity_level: 'rouge' },
     { name: 'Méningite', keywords: ['nuque', 'raideur'], severity_level: 'rouge' },
     { name: 'Paludisme Sévère', keywords: ['palu', 'moustique', 'chaud', 'grelotte', 'frisson', 'anémie'], severity_level: 'jaune' },
     { name: 'Dengue', keywords: ['douleur', 'articulation', 'fièvre', 'tête'], severity_level: 'jaune' },
     { name: 'Infection respiratoire', keywords: ['toux', 'tousse', 'rhume', 'gorge'], severity_level: 'jaune' },
 ];
+
+// Minuscules sans accents : "fievre" (envoyé par /signaler) doit matcher "fièvre"
+const normalize = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
 
 // Type attendu du Frontend
 interface TriageRequest {
@@ -39,7 +42,7 @@ export async function POST(req: Request) {
         if (typeof body?.transcript !== 'string' || !body.transcript.trim()) {
             return NextResponse.json({ error: 'Description des symptômes requise.' }, { status: 400 });
         }
-        const text = body.transcript.toLowerCase();
+        const text = normalize(body.transcript);
 
         // 1. Detection du syndrome et de la gravité selon les mots-clés de la Base de Données
         let syndrome: TriageResponse['syndrome'] = 'unknown';
@@ -75,7 +78,7 @@ export async function POST(req: Request) {
         for (const disease of sortedDiseases) {
             const keywords: string[] = Array.isArray(disease.keywords) ? disease.keywords : [];
             // Cherche si un des mots clés de la maladie est dans la transcription
-            const hasMatch = keywords.some((keyword: string) => text.includes(keyword.toLowerCase()));
+            const hasMatch = keywords.some((keyword: string) => text.includes(normalize(keyword)));
 
             if (hasMatch) {
                 illness = disease.name;
